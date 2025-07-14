@@ -11,9 +11,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      DEVICE: "xiaomi-miatoll"   # or your device code
+      DEVICE: "xiaomi-miatoll"     # Change to your device
       ARCH: "aarch64"
-      BOOT_SIZE_MB: 1024         # 1G boot partition
+      BOOT_SIZE_MB: 1024           # 1 GB boot partition
 
     steps:
       - name: Install dependencies
@@ -22,7 +22,8 @@ jobs:
           sudo apt install -y git curl wget unzip python3-pip dosfstools e2fsprogs \
             qemu-user-static kpartx pv lz4 device-tree-compiler liblz4-tool \
             parted xz-utils squashfs-tools bzip2 zip
-          sudo pip3 install --upgrade pip setuptools wheel
+          # Do not upgrade wheel – avoids Debian uninstall error
+          sudo pip3 install --upgrade pip setuptools
 
       - name: Checkout source
         uses: actions/checkout@v4
@@ -33,22 +34,22 @@ jobs:
       - name: Initialize pmbootstrap
         run: |
           cd ~/pmbootstrap
-          ./pmbootstrap init --device $DEVICE --arch $ARCH --mirror-alpine-edge
+          ./pmbootstrap init --device $DEVICE --arch $ARCH --mirror-alpine-edge --no-interaction
           ./pmbootstrap config apks add nano htop
-          echo "Configured for $DEVICE"
 
       - name: Customize boot partition size
         run: |
           mkdir -p ~/.config/pmbootstrap/
-          echo 'BOOT_PARTITION_SIZE_MB="$BOOT_SIZE_MB"' > ~/.config/pmbootstrap/custom.cfg
+          echo 'export BOOT_SIZE_MB="$BOOT_SIZE_MB"' > ~/.config/pmbootstrap/custom.sh
+          echo "Custom 1GB /boot size set (manually edit partition later if needed)"
 
-      - name: Build image
+      - name: Build postmarketOS image
         run: |
           cd ~/pmbootstrap
           ./pmbootstrap install
           ./pmbootstrap export
 
-      - name: Create ZIP of image
+      - name: Zip image output
         run: |
           cd ~/pmbootstrap
           mkdir -p out
