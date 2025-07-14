@@ -1,93 +1,61 @@
-name: Build images
+name: Build postmarketOS Image
 
 on:
-  push:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * 5' # Run every Friday at midnight
-
-env:
-  KERNEL_BRANCH: 6.12.1
+  push:
+    branches:
+      - main
 
 jobs:
-  build-image:
-    strategy:
-      matrix:
-        version: ["default"]
-
+  build-pmos:
     runs-on: ubuntu-latest
 
+    env:
+      DEVICE: "xiaomi-miatoll"   # or your device code
+      ARCH: "aarch64"
+      BOOT_SIZE_MB: 1024         # 1G boot partition
+
     steps:
-      - name: Check out build configurations
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y git curl wget unzip python3-pip dosfstools e2fsprogs \
+            qemu-user-static kpartx pv lz4 device-tree-compiler liblz4-tool \
+            parted xz-utils squashfs-tools bzip2 zip
+          sudo pip3 install --upgrade pip setuptools wheel
+
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Substitute placeholders in configs
+      - name: Clone pmbootstrap
+        run: git clone https://gitlab.com/postmarketOS/pmbootstrap.git ~/pmbootstrap
+
+      - name: Initialize pmbootstrap
         run: |
-          find . -type f -name "*.cfg" -exec sed -i "s|HOME|$(echo $HOME)|;s|NPROC|$(nproc)|" {} +
+          cd ~/pmbootstrap
+          ./pmbootstrap init --device $DEVICE --arch $ARCH --mirror-alpine-edge
+          ./pmbootstrap config apks add nano htop
+          echo "Configured for $DEVICE"
 
-      - name: Install pmbootstrap from git
+      - name: Customize boot partition size
         run: |
-          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
-          mkdir -p ~/.local/bin
-          ln -s "$PWD/pmbootstrap/pmbootstrap.py" ~/.local/bin/pmbootstrap
-          pmbootstrap --version
+          mkdir -p ~/.config/pmbootstrap/
+          echo 'BOOT_PARTITION_SIZE_MB="$BOOT_SIZE_MB"' > ~/.config/pmbootstrap/custom.cfg
 
-      - name: Set up pmaports
+      - name: Build image
         run: |
-          echo -e '\n\nedge\nfairphone\nfp4\n\n\nphosh\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n' | pmbootstrap init || true
-          cd ~/.local/var/pmbootstrap/cache_git/pmaports
-          git remote add 99degree https://github.com/99degree/pmaports.git
-          DEFAULT_BRANCH=$(git remote show sm7125 | awk '/HEAD branch/ {print $NF}')
-          git fetch 99degree $DEFAULT_BRANCH
-          git checkout 99degree/next -- main/adbd-linux
+          cd ~/pmbootstrap
+          ./pmbootstrap install
+          ./pmbootstrap export
 
-      - name: Check kernel branch
-        if: matrix.version == 'default'
+      - name: Create ZIP of image
         run: |
-          DEFAULT_BRANCH=$(curl -s https://api.github.com/repos/sm7125-mainline/linux | jq -r '.default_branch')
-          echo "Default branch is $DEFAULT_BRANCH"
-          echo "KERNEL_BRANCH=$DEFAULT_BRANCH" >> $GITHUB_ENV
+          cd ~/pmbootstrap
+          mkdir -p out
+          zip -r out/postmarketos-${{ env.DEVICE }}.zip pmboutput/
 
-      # Optional: Uncomment if kernel build is desired
-      #- name: Clone kernel sources
-      #  run: |
-      #    git clone https://github.com/sm7125-mainline/linux.git --single-branch --branch ${{ env.KERNEL_BRANCH }} --depth 1 ./linux
-
-      - name: Choose any SM7125 device in pmbootstrap to build kernel
-        run: |
-          cp xiaomi-miatoll.cfg ~/.config/pmbootstrap_v3.cfg
-
-      # Optional: Uncomment if building kernel with envkernel
-      #- name: Compile kernel with envkernel
-      #  run: |
-      #    cd linux
-      #    source ../pmbootstrap/helpers/envkernel.sh
-      #    make defconfig sm7125.config
-      #    make -j$(nproc)
-      #    pmbootstrap build --envkernel linux-postmarketos-qcom-sm7125
-
-      - name: Create artifact directory
-        run: mkdir -p out
-
-      - name: Build xiaomi-curtana
-        run: |
-          cp xiaomi-miatoll.cfg ~/.config/pmbootstrap_v3.cfg
-          pmbootstrap build adbd-linux
-          pmbootstrap config extra_packages adbd-linux
-          pmbootstrap install --password 147147 --split
-          pmbootstrap export
-          ls -la /tmp/postmarketOS-export/
-
-          # Copy known output images
-          cp /tmp/postmarketOS-export/xiaomi-miatoll-boot.img out/boot-xiaomi-tianma-miatoll.img || true
-          cp /tmp/postmarketOS-export/*miatoll*.img out/ || true
-
-          # Clean up
-          echo -e "n\nn\ny\n" | pmbootstrap zap
-
-      - name: Upload artifacts
+      - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xiaomi-curtana-${{ env.KERNEL_BRANCH }}
-          path: out/*-miatol*.img*
-          retention-days: 7
+          name: postmarketos-image
+          path: ~/pmbootstrap/out/postmarketos-${{ env.DEVICE }}.zip
